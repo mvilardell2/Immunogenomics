@@ -1,0 +1,229 @@
+---
+title: "CyTOF data analysis"
+author: "Maurizio Callari"
+date: "June 2024"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+
+rm(list=ls()) # workspace clearing
+graphics.off()
+
+# LOAD LIBRARIES
+library(affy)
+library(flowCore)
+library(ggplot2)
+library(reshape2)
+library(reshape)
+library(Rtsne)
+library(colorRamps)
+library(gplots)
+library(ComplexHeatmap)
+library(EMDomics)
+library(Rphenograph)
+library(circlize)
+
+set.seed(123)
+
+# SET WD
+wd<-"/Users/mauriziocallari/Library/CloudStorage/OneDrive-MICHELANGELOTECHSRL/Teaching/2024 06 COST summer school/Teaching material/CyTOF/Practical/"
+datapath<-paste0(wd,"data/")
+outpath<-paste0(wd,"outputs/")
+dir.create(file.path(outpath), recursive=T, showWarnings = FALSE)
+knitr::opts_knit$set(root.dir = outpath)
+
+
+# LOAD DATA
+load(paste0(outpath,"1a-raw_data_downsampled.RData"))
+dataset<-downset
+```
+
+# Heatmap mean signals
+
+```{r,fig.width=9,fig.height=5}
+
+# HEATMAP MEDIAN SIGNALS
+mymedian<-function(x){
+  medin<-median(x,na.rm=T)
+}
+m<-aggregate(t(exprs(dataset)),by=list(dataset$Treatment),FUN="mean")
+rownames(m)<-m$Group.1
+m<-m[,2:ncol(m)]
+colnames(m)<-fData(dataset)$protein
+m<-scale(m)
+
+mycol1<-c(rep("navy",5), colorpanel(n=90,low="navy",mid="white",high="gold1"), rep("gold1",5))
+
+Heatmap(as.matrix(m), name = "Intensity",
+        width = unit(6*ncol(m), "mm"),
+        #clustering_distance_rows="euclidean",
+        #clustering_method_rows=myclust,
+        cluster_columns=T,
+        col = mycol1,
+        show_row_names = T, 
+        row_names_side="left",
+        row_names_gp=gpar(fontsize=10),
+        row_dend_side="right",
+        show_column_names = T,
+        column_names_gp=gpar(fontsize=9))
+```
+
+# EMD
+
+```{r,fig.width=16,fig.height=8}
+
+# EMD
+subset<-dataset[,dataset$Treatment%in%c("DMSO","mTORi")]
+mat<-exprs(subset)
+rownames(mat)<-fData(subset)$protein
+group<-as.vector(subset$Treatment)
+names(group)<-colnames(subset)
+emd<-calculate_emd(mat,group,binSize=0.05,nperm=100,pairwise.p=T,verbose=F,parallel=F)
+# emd$emd
+
+# PLOT DMSO VS mTORi
+
+df<-data.frame(t(mat),subset$Treatment)
+colnames(df)<-c(fData(subset)$protein, "Treatment")
+df.melt<-melt(df)
+
+df.melt$Treatment<-factor(df.melt$Treatment,levels=c("DMSO","mTORi"))
+emd.plot<-round(emd$pairwise.emd[,"DMSO vs mTORi"],2)
+text.emd<-data.frame(x=rep(4.5,length(emd.plot)),y=rep(1.2,length(emd.plot)),
+                     label=paste0("e=",emd.plot),
+                     variable = names(emd.plot))
+ggplot(df.melt, aes(x=value,fill=Treatment,col=Treatment)) +
+  geom_density(alpha=0.5,lwd=1) +
+  facet_wrap(variable ~ ., scales = "free_y",ncol=6) +
+  scale_x_continuous(name="Intensity") +
+  scale_y_continuous(name="Density") +
+  scale_fill_manual(values = c("grey50","dodgerblue3"),labels=c("DMSO","mTORi")) +
+  scale_color_manual(values = c("grey50","dodgerblue3"),labels=c("DMSO","mTORi")) +
+  geom_text(data = text.emd,
+            inherit.aes=F,
+            mapping = aes(x = x, y = y, label = label),
+            size=5) +
+  expand_limits(y=c(0,1.5)) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        strip.text=element_text(size=14, color="black",vjust=0),
+        strip.background = element_rect(fill="white",colour=NA),
+        legend.title = element_text(size=12, lineheight=1, color="black"),
+        legend.text = element_text(size=12, lineheight=1, color="black"),
+        axis.line = element_line(colour = "black"),
+        axis.title=element_text(size=12, color="black"),
+        axis.text.x=element_text(size=12, angle=0, hjust=0.5,lineheight=1, color="black"),
+        axis.text.y=element_text(size=12, lineheight=1, color="black"))
+
+```
+
+# Clustering
+
+```{r,fig.width=12,fig.height=5}
+
+# PHENOGRAPH
+mat<-t(exprs(dataset))
+colnames(mat)<-fData(dataset)$protein
+dim(mat)
+
+
+# PHENOGRAPH
+pheno<-Rphenograph(mat,k=100)
+save(pheno,file=paste0(outpath,"2a-raw_data_Phenograph_object.RData"))
+
+# ADD CLUSTER LABELS
+dataset$pheno.clust<-as.factor(membership(pheno[[2]]))
+save(dataset,file=paste0(outpath,"2a-raw_data_clustered.RData"))
+
+```
+
+```{r,fig.width=12,fig.height=5}
+
+m<-aggregate(t(exprs(dataset)),by=list(dataset$pheno.clust),FUN="mean")
+rownames(m)<-m$Group.1
+m<-m[,2:ncol(m)]
+colnames(m)<-fData(dataset)$protein
+m<-scale(m)
+
+
+# Prevalence
+cluster<-rownames(m)
+prev<-summary(dataset$pheno.clust)/ncol(dataset)
+
+# combined annotation
+ha<-HeatmapAnnotation(Prevalence=anno_barplot(prev, baseline = 0, axis = TRUE,
+          bar_width=0.95,
+          gp = gpar(fill="grey80"))) 
+
+# Main heatmap
+limit<-max(abs(range(m)))
+mycol_fun<-colorRamp2(seq((-limit),limit,length.out=100),colors=mycol1)
+
+Heatmap(t(m), name = "Marker\nZ-score",
+        width = unit(5*ncol(m), "mm"),
+        show_heatmap_legend=T,
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 14,lineheight=0.9),
+                                    labels_gp = gpar(fontsize = 14),
+                                    grid_height=unit(15,"pt")),
+        cluster_columns = T,
+        cluster_rows = T,
+        col = mycol_fun,
+        show_row_names = T, 
+        row_names_side="left",
+        row_names_gp=gpar(fontsize=14),
+        show_column_names = T,
+        column_names_gp=gpar(fontsize=12),
+        top_annotation = ha
+        ) 
+
+```
+
+```{r,fig.width=6,fig.height=5}
+
+# prevalence per sample
+df<-aggregate(dataset$cellID,
+                by=list(dataset$pheno.clust,dataset$Treatment),
+                FUN="length")
+colnames(df)<-c("cluster","sample","n.cells")
+
+ggplot(df, aes(fill=cluster, y=n.cells, x=sample)) + 
+    geom_bar(position="stack", stat="identity") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        strip.text=element_text(size=14, color="black",vjust=0),
+        strip.background = element_rect(fill="white",colour=NA),
+        legend.title = element_text(size=12, lineheight=1, color="black"),
+        legend.text = element_text(size=12, lineheight=1, color="black"),
+        axis.line = element_line(colour = "black"),
+        axis.title=element_text(size=12, color="black"),
+        axis.text.x=element_text(size=12, angle=0, hjust=0.5,lineheight=1, color="black"),
+        axis.text.y=element_text(size=12, lineheight=1, color="black"))
+
+```
+
+```{r,fig.width=6,fig.height=5}
+load(paste0(outpath,"1a-raw_data_tSNE.RData"))
+
+tsne.data<-data.frame(cell=dataset$pheno.clust,tsne$Y)
+tsne.data.melt<-melt(tsne.data,id.vars=c("X1","X2"))
+ggplot(tsne.data.melt, aes(x=X1, y=X2),fill==value) +
+        geom_point(aes(colour=value),size=0.9) +
+        ggtitle(paste0("tSNE")) +
+        theme_bw() +
+        theme(plot.title = element_text(lineheight=1),
+              legend.title=element_blank(),
+              legend.text=element_text(colour="black", size = 14),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(), 
+              axis.line = element_line(colour = "black"),
+              axis.text.x=element_text(size=12, angle=0, hjust=1, lineheight=1,  color="black"),
+              axis.text.y=element_text(size=12, lineheight=1,  color="black"))
+
+```

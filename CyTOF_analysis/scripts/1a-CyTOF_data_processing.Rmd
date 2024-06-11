@@ -1,0 +1,231 @@
+---
+title: "CyTOF data processing"
+author: "Marina Vilardell"
+date: "June 2024"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+
+rm(list=ls()) # workspace clearing
+graphics.off()
+
+# LOAD LIBRARIES
+library(affy)
+library(flowCore)
+library(ggplot2)
+library(reshape2)
+library(Rtsne)
+library(colorRamps)
+
+set.seed(123)
+getwd()
+# SET WD
+wd<-"C:/Users/MARINA/Documents/Immunogenomics_course/CyTOF_analysis/"
+datapath<-paste0(wd,"data/")
+outpath<-paste0(wd,"outputs/")
+dir.create(file.path(outpath), recursive=T, showWarnings = FALSE)
+knitr::opts_knit$set(root.dir = outpath)
+
+
+```
+
+# Data import
+
+```{r, include=FALSE}
+# IMPORT METADATA
+metadata<-read.table(paste0(datapath,"metadata.txt"),sep="\t",header=T,row.names = 1)
+# View(metadata)
+
+# IMPORT ANTIBODY PANEL INFO
+panel<-read.table(paste0(datapath,"Panel_1.35.txt"),header=T,sep="\t",row.names = 1)
+# View(panel)
+
+# IMPORT DATA
+filenames<-rownames(metadata)
+sampleID<-gsub(".fcs","",filenames)
+
+# METHOD 1
+cytoftrans=arcsinhTransform(transformationId='cytofTransform',a=0,b=(1/5),c=0)
+
+signal.all<-numeric()
+for(i in 1:length(filenames)) {
+  flowFrame<-read.FCS(filename=paste0(datapath,filenames[i]),truncate_max_range = FALSE)
+  translist=transformList(colnames(exprs(flowFrame)),cytoftrans)
+  flowFrame=transform(flowFrame,translist)
+  
+  signal<-exprs(flowFrame)[,panel$barcode]
+  rownames(signal)<-paste(sampleID[i],c(1:nrow(signal)),sep=".")
+  signal.all<-rbind(signal.all,signal)
+}
+
+ID<-apply(as.matrix(rownames(signal.all)),1,function(x){strsplit(x,"\\.")[[1]][1]})
+cell<-apply(as.matrix(rownames(signal.all)),1,function(x){strsplit(x,"\\.")[[1]][2]})
+cellID<-rownames(signal.all)
+features<-data.frame(cellID,ID,cell)
+features.merge<-merge(features,metadata,by.x="ID",by.y="SampleID",all.x=T,sort=F)
+rownames(features.merge)<-features.merge$cellID
+
+# generate expressionset
+phenoData <- new("AnnotatedDataFrame", data = features.merge)
+fData <- new("AnnotatedDataFrame", data = panel)
+dataset<- new("ExpressionSet", exprs = t(signal.all), phenoData=phenoData, featureData=fData)
+dataset
+
+save(dataset,file=paste0(outpath,"1a-raw_data.RData"))
+
+
+
+# METHOD 2
+# flowSet<-read.flowSet(path=datapath,files=filenames,truncate_max_range = FALSE)
+
+```
+
+# Raw data visualization
+
+```{r,fig.width=6,fig.height=5}
+
+# number of cells per sample
+df<-aggregate(dataset$ID,by=list(dataset$ID),FUN="length")
+colnames(df)<-c("sample","n.cells")
+ggplot(data=df, aes(x=sample, y=n.cells, fill=sample)) +
+        geom_bar(stat="identity",position=position_dodge()) +
+        scale_y_continuous(name="number of cells") +
+        scale_x_discrete(name="samples") +
+        ggtitle("Number of cells per sample") +
+        theme_bw() +
+        theme(plot.title = element_text(lineheight=1, size = 14),
+              legend.title=element_text(colour="black", size = 14),
+              legend.text=element_text(colour="black", size = 14),
+              axis.title.x=element_text(size=14, color="black", angle=0),
+              axis.title.y=element_text(size=14, color="black", angle=90),
+              axis.text.x=element_text(size=14, angle=0, hjust=0.5, lineheight=1, color="black"),
+              axis.text.y=element_text(size=14, lineheight=1, color="black"))
+
+```
+
+```{r,fig.width=12,fig.height=5}
+
+# signal intensity per sample
+df<-t(exprs(dataset))
+colnames(df)<-fData(dataset)$protein
+df.melt<-reshape2::melt(df)
+df.melt$sampleID<-apply(as.matrix(df.melt$Var1),1,function(x){strsplit(x,"\\.")[[1]][1]})
+
+ggplot(df.melt, aes(x=Var2, y=value, fill=sampleID)) + 
+  geom_boxplot(outlier.shape=".") +
+  scale_y_continuous(name="Intensity") +
+  scale_x_discrete(name="markers") +
+  ggtitle("Marker signal per sample") +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight=1, size = 14),
+        legend.title=element_text(colour="black", size = 14),
+        legend.text=element_text(colour="black", size = 14),
+        axis.title.x=element_text(size=14, color="black", angle=0),
+        axis.title.y=element_text(size=14, color="black", angle=90),
+        axis.text.x=element_text(size=14, angle=90, hjust=1, lineheight=1, color="black"),
+        axis.text.y=element_text(size=14, lineheight=1, color="black"))
+
+```
+
+```{r,fig.width=5,fig.height=4}
+# DOWNSAMPLING
+samples<-unique(dataset$ID)
+IDs<-numeric()
+set.seed(123)
+for(i in 1:length(samples)) {
+  x<-exprs(dataset)[,dataset$ID==samples[i]]
+  sample<-sample(ncol(x),2000,replace=F)
+  IDs<-c(IDs,colnames(x)[sample])
+}
+# length(IDs)
+downset<-dataset[,IDs]
+save(downset,file=paste0(outpath,"1a-raw_data_downsampled.RData"))
+
+# tSNE ALL SAMPLES, ALL MARKERS
+set.seed(123)
+tsne<-Rtsne(t(exprs(downset)),
+            perplexity = 30,
+            pca=F,
+            max_iter=1000,
+            check_duplicates = F
+)
+save(tsne,file=paste0(outpath,"1a-raw_data_tSNE.RData"))
+
+
+# tSNE CELL LABELS
+m<-t(exprs(downset))
+sampleIDs<-downset$ID
+colnames(m)<-fData(downset)$protein
+tsne.data<-data.frame(sampleIDs,tsne$Y)
+tsne.data.melt<-melt(tsne.data,id.vars=c("X1","X2"))
+ggplot(tsne.data.melt, aes(x=X1, y=X2),fill==value) +
+        geom_point(aes(colour=value),size=0.9) +
+        ggtitle(paste0("tSNE")) +
+        theme_bw() +
+        theme(plot.title = element_text(lineheight=1),
+              legend.title=element_blank(),
+              legend.text=element_text(colour="black", size = 14),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(), 
+              axis.line = element_line(colour = "black"),
+              axis.text.x=element_text(size=14, angle=0, hjust=1, lineheight=1,  color="black"),
+              axis.text.y=element_text(size=14, lineheight=1,  color="black"))
+
+
+```
+
+```{r,fig.width=12,fig.height=8}
+
+# tSNE PER MARKER
+m<-t(exprs(downset))
+sampleIDs<-downset$ID
+colnames(m)<-fData(downset)$protein
+tsne.data<-data.frame(m,tsne$Y)
+tsne.data.melt<-melt(tsne.data,id.vars=c("X1","X2"))
+
+mycol4<-matlab.like2(30)
+
+ggplot(tsne.data.melt, aes(x=X1, y=X2)) +
+        facet_wrap(~variable,ncol=6) +
+        geom_point(shape=20,size=2,aes(colour=value)) +
+        scale_x_continuous(name="") +
+        scale_y_continuous(name="") +
+        scale_colour_gradientn(colours = mycol4) +
+        ggtitle(paste0("tSNE all samples all markers")) +
+        theme_bw() +
+        theme(plot.title = element_text(lineheight=1, size=16),
+              legend.title=element_blank(),
+              legend.text=element_text(colour="black", size = 15,),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(), 
+              strip.text=element_text(size=14,color="black"),
+              axis.line = element_line(colour = "black"),
+              axis.text.x=element_text(size=14, angle=0, hjust=1, lineheight=1, color="black"),
+              axis.text.y=element_text(size=14, lineheight=1,  color="black"))
+
+
+```
+
+# Cosine normalization
+
+```{r,include=FALSE}
+
+# COSINE NORMALIZATION
+cosnorm<-function(x) {
+  norm<-sqrt(sum(x^2))
+  x.n<-x/norm
+  return(x.n)
+}
+
+norm.dataset<-dataset
+exprs(norm.dataset)<-apply(exprs(dataset),2,cosnorm)
+save(norm.dataset,file=paste0(outpath,"1a-norm_data.RData")) 
+
+```

@@ -1,0 +1,5 @@
+Filename	SampleID	Date	Experiment_Number	Run	Barcode	Type	ER	HER2	p53_MUT	PIK3CA_MUT	Treatment	Dose_nM
+A3.fcs	A3	13.03.2018	13	A	3	cell line	Pos	Neg	NO	YES	DMSO	NA
+A5.fcs	A5	13.03.2018	13	A	5	cell line	Pos	Neg	NO	YES	PI3Ki	1000
+A7.fcs	A7	13.03.2018	13	A	7	cell line	Pos	Neg	NO	YES	CDK4/6i	1000
+A14.fcs	A14	13.03.2018	13	A	14	cell line	Pos	Neg	NO	YES	mTORi	1000
