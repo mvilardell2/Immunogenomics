@@ -1,6 +1,6 @@
 ---
 title: "CyTOF data analysis"
-author: "Maurizio Callari"
+author: "Marina Vilardell"
 date: "June 2024"
 output:
   html_document:
@@ -8,7 +8,6 @@ output:
     toc_float: true
     number_sections: true
 ---
-
 
 ```{r, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
@@ -33,7 +32,7 @@ library(circlize)
 set.seed(123)
 
 # SET WD
-wd<-"/Users/mauriziocallari/Library/CloudStorage/OneDrive-MICHELANGELOTECHSRL/Teaching/2024 06 COST summer school/Teaching material/CyTOF/Practical/"
+wd<-"C:/Users/MARINA/Documents/Immunogenomics_course/CyTOF_analysis/"
 datapath<-paste0(wd,"data/")
 outpath<-paste0(wd,"outputs/")
 dir.create(file.path(outpath), recursive=T, showWarnings = FALSE)
@@ -145,7 +144,6 @@ save(dataset,file=paste0(outpath,"2a-raw_data_clustered.RData"))
 ```
 
 ```{r,fig.width=12,fig.height=5}
-
 m<-aggregate(t(exprs(dataset)),by=list(dataset$pheno.clust),FUN="mean")
 rownames(m)<-m$Group.1
 m<-m[,2:ncol(m)]
@@ -185,6 +183,8 @@ Heatmap(t(m), name = "Marker\nZ-score",
 
 ```
 
+In this graphic we can see the features that are represented in each of the clusters. It also allows to see if there are clusters that share features and so they are similar (over represent features-for example custers 2 and 4 or 1 and 6).
+
 ```{r,fig.width=6,fig.height=5}
 
 # prevalence per sample
@@ -207,6 +207,8 @@ ggplot(df, aes(fill=cluster, y=n.cells, x=sample)) +
         axis.text.y=element_text(size=12, lineheight=1, color="black"))
 
 ```
+
+Cluster 7 is very representative in mTori sample (go to previous plot to see which features are represented in cluster 7).
 
 ```{r,fig.width=6,fig.height=5}
 load(paste0(outpath,"1a-raw_data_tSNE.RData"))
