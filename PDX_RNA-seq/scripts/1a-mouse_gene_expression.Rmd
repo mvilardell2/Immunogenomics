@@ -1,0 +1,266 @@
+---
+title: "PDX RNAseq experiment"
+author: "Marina Vilardell"
+date: "June 2024"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+
+rm(list=ls()) # clearing del workspace
+graphics.off()
+
+# LOAD LIBRARIES
+library(Biobase)
+library(ggplot2)
+library(ggpointdensity)
+library(viridis)
+library(gplots)
+library(circlize)
+library(ComplexHeatmap)
+library(RColorBrewer)
+
+set.seed(123)
+
+# SET WD
+wd<-"C:/Users/MARINA/Documents/Immunogenomics_course/PDX_RNA-seq/"
+datapath<-paste0(wd,"data/")
+outpath<-paste0(wd,"outputs/")
+dir.create(file.path(outpath), recursive=T, showWarnings = FALSE)
+knitr::opts_knit$set(root.dir = outpath)
+
+
+```
+
+# Analysis of mouse gene expression - normalised on ALL READS
+
+Our data are reads generated from RNA-seq. They have been aligned to the genome and quantified gene expression. 
+The data we have is from treated and untreated PDX. 
+
+```{r, include=FALSE}
+
+# LOAD DATA
+load(paste0(datapath,"exercise_pdx_mouse_tpm_total_reads.RData"))
+exprs(dataset)<-log2(exprs(dataset)+min(exprs(dataset)[exprs(dataset)>0]))#Compute the log2 and add the minimum gene expression value from all the dataset (excluding 0 values)
+
+# mouse percentage
+files<-dir(path=datapath,pattern="read_count_stats.txt")
+samples<-sapply(files,function(x){strsplit(x,"_")[[1]][1]})
+perc.mouse.all<-numeric()
+for(i in 1:length(files)) {
+  nreads<-read.table(paste0(datapath,files[i]),header=F,sep="\t")
+  perc.mouse<-nreads$V2[2]/(nreads$V2[2]+nreads$V2[1])*100
+  perc.mouse.all<-c(perc.mouse.all,perc.mouse)
+}
+names(perc.mouse.all)<-samples
+dataset$perc.mouse<-perc.mouse.all
+
+
+#feature data: 
+head(fData(dataset))
+
+#pheno data: 
+pData(dataset)
+
+```
+
+## Filtering
+
+For each gene the mean and sd is computed. Set a threshold and select those over the threshold.
+
+```{r,fig.width=9,fig.height=5}
+
+# FILTER
+mean<-apply(exprs(dataset),1,mean)
+sd<-apply(exprs(dataset),1,sd)
+
+th.mean=3
+th.sd=0.6
+# sum(mean>th.mean&sd>th.sd)
+
+df<-data.frame(mean,sd)
+ggplot(data = df, mapping = aes(x = mean, y = sd)) +
+  geom_pointdensity(size=2) +
+  geom_vline(xintercept = th.mean, col="red3") +
+  geom_hline(yintercept = th.sd, col="red3") +
+  scale_color_viridis(option="H", end=0.7,alpha=0.5) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+      legend.title = element_text(size=12, lineheight=1, color="black"),
+      legend.text = element_text(size=12, lineheight=1, color="black"),
+      axis.line = element_line(colour = "black"),
+      axis.title=element_text(size=12, color="black"),
+      axis.text.x=element_text(size=12, angle=0, hjust=0.5,lineheight=1, color="black"),
+      axis.text.y=element_text(size=12, lineheight=1, color="black"))
+
+
+isexpr<-mean>th.mean&sd>th.sd
+dataset.f<-dataset[isexpr,]
+
+```
+
+We can see deviation lines in the map, that happen when there are genes that have 0 in all the samples. 
+
+## Annotated heatmap
+
+```{r,fig.width=9,fig.height=7}
+# COLORS
+mycol<- colorpanel(n=100,low="dodgerblue3",mid="white",high="firebrick3")
+col.treat=c("lightblue2","firebrick4")
+names(col.treat)<-c("Untreated","Treated")
+col.percmouse=colorRamp2(c(0, 25), c("white", "coral4"))
+
+# heatmap annotation
+ha<-HeatmapAnnotation(df = data.frame(Treatment=dataset$treatment, Perc_mouse=dataset$perc.mouse), 
+        col=list(Treatment=col.treat,Perc_mouse=col.percmouse), 
+        annotation_legend_param = list(
+                 Treatment=list(title = "Treatment",title_gp = gpar(fontsize = 14),labels_gp = gpar(fontsize = 14),
+                          grid_height=unit(15,"pt")),
+                  Perc_mouse=list(title = "% Mouse",title_gp = gpar(fontsize = 14),labels_gp = gpar(fontsize = 14),
+                            grid_height=unit(15,"pt"))),
+        show_legend = T,
+        na_col = "grey70",
+        annotation_name_gp=gpar(fontsize=14))
+
+# main heatmap
+mat<-t(scale(t(exprs(dataset.f))))
+limit<-2
+mycol_fun<-colorRamp2(seq((-limit),limit,length.out=100),colors=mycol)
+heat1<-Heatmap(mat, name = "Expression",
+        width = unit(13*ncol(mat), "mm"),
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 14),
+                                    labels_gp = gpar(fontsize = 14),
+                                    grid_height=unit(15,"pt")),
+        clustering_distance_rows="euclidean",
+        clustering_method_rows="ward.D2",
+        clustering_distance_columns="euclidean",
+        clustering_method_columns="ward.D2",
+        cluster_columns = T,
+        col = mycol_fun,
+        show_row_names = F, 
+        row_names_side="right",
+        row_names_gp=gpar(fontsize=5,fontface=1),
+        row_dend_side="left",
+        show_column_names = T,
+#        column_names_gp=gpar(fontsize=10,fontface=2),
+        top_annotation = ha,
+        )
+draw(heat1,merge_legend=T)
+
+
+```
+
+We selected the most variable genes between samples and then plotted their expression levels in a heatmap. Those samples that have less mouse percentage of reads, have less expression of the genes. 
+
+
+# Analysis of mouse gene expression - normalised on MOUSE READS
+
+```{r, include=FALSE}
+
+# LOAD DATA
+load(paste0(datapath,"exercise_pdx_mouse_tpm_mouse_reads.RData"))
+exprs(dataset)<-log2(exprs(dataset)+min(exprs(dataset)[exprs(dataset)>0]))
+
+# mouse percentage
+files<-dir(path=datapath,pattern="read_count_stats.txt")
+samples<-sapply(files,function(x){strsplit(x,"_")[[1]][1]})
+perc.mouse.all<-numeric()
+for(i in 1:length(files)) {
+  nreads<-read.table(paste0(datapath,files[i]),header=F,sep="\t")
+  perc.mouse<-nreads$V2[2]/(nreads$V2[2]+nreads$V2[1])*100
+  perc.mouse.all<-c(perc.mouse.all,perc.mouse)
+}
+names(perc.mouse.all)<-samples
+dataset$perc.mouse<-perc.mouse.all
+
+```
+
+## Filtering
+
+```{r,fig.width=9,fig.height=5}
+
+# FILTER
+mean<-apply(exprs(dataset),1,mean)
+sd<-apply(exprs(dataset),1,sd)
+
+th.mean=3
+th.sd=0.6
+sum(mean>th.mean&sd>th.sd)
+
+df<-data.frame(mean,sd)
+ggplot(data = df, mapping = aes(x = mean, y = sd)) +
+  geom_pointdensity(size=2) +
+  geom_vline(xintercept = th.mean, col="red3") +
+  geom_hline(yintercept = th.sd, col="red3") +
+  scale_color_viridis(option="H", end=0.7,alpha=0.5) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+      legend.title = element_text(size=12, lineheight=1, color="black"),
+      legend.text = element_text(size=12, lineheight=1, color="black"),
+      axis.line = element_line(colour = "black"),
+      axis.title=element_text(size=12, color="black"),
+      axis.text.x=element_text(size=12, angle=0, hjust=0.5,lineheight=1, color="black"),
+      axis.text.y=element_text(size=12, lineheight=1, color="black"))
+
+
+isexpr<-mean>th.mean&sd>th.sd
+dataset.f<-dataset[isexpr,]
+
+```
+
+## Annotated heatmap
+
+```{r,fig.width=9,fig.height=7}
+# COLORS
+mycol<-colorpanel(n=100,low="dodgerblue3",mid="white",high="firebrick3")
+col.treat=c("lightblue2","firebrick4")
+names(col.treat)<-c("Untreated","Treated")
+col.percmouse=colorRamp2(c(0, 25), c("white", "coral4"))
+
+# heatmap annotation
+ha<-HeatmapAnnotation(df = data.frame(Treatment=dataset$treatment, Perc_mouse=dataset$perc.mouse), 
+        col=list(Treatment=col.treat,Perc_mouse=col.percmouse), 
+        annotation_legend_param = list(
+                 Treatment=list(title = "Treatment",title_gp = gpar(fontsize = 14),labels_gp = gpar(fontsize = 14),
+                          grid_height=unit(15,"pt")),
+                  Perc_mouse=list(title = "% Mouse",title_gp = gpar(fontsize = 14),labels_gp = gpar(fontsize = 14),
+                            grid_height=unit(15,"pt"))),
+        show_legend = T,
+        na_col = "grey70",
+        annotation_name_gp=gpar(fontsize=14))
+
+# main heatmap
+mat<-t(scale(t(exprs(dataset.f))))
+limit<-2
+mycol_fun<-colorRamp2(seq((-limit),limit,length.out=100),colors=mycol)
+heat1<-Heatmap(mat, name = "Expression",
+        width = unit(13*ncol(mat), "mm"),
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 14),
+                                    labels_gp = gpar(fontsize = 14),
+                                    grid_height=unit(15,"pt")),
+        clustering_distance_rows="euclidean",
+        clustering_method_rows="ward.D2",
+        clustering_distance_columns="euclidean",
+        clustering_method_columns="ward.D2",
+        cluster_columns = T,
+        col = mycol_fun,
+        show_row_names = F, 
+        row_names_side="right",
+        row_names_gp=gpar(fontsize=5,fontface=1),
+        row_dend_side="left",
+        show_column_names = T,
+#        column_names_gp=gpar(fontsize=10,fontface=2),
+        top_annotation = ha,
+        )
+draw(heat1,merge_legend=T)
+
+
+```
+
+Now, we performed the same analysis, but the data obtained was only normalized on mouse reads. 
+Cannot clearly distinguish between expression levels of the samples. Loss of association between percentatge of mouse reads - gene expression levels.

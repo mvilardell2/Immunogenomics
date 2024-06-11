@@ -1,0 +1,2 @@
+human reads	82709456
+mouse reads	10265944
