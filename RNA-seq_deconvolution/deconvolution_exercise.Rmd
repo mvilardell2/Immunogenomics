@@ -1,0 +1,181 @@
+---
+title: "Deconvolution practical exercise"
+output: html_document
+date: "2024-06-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Deconvolution practical exercise
+
+```{r load data, echo=FALSE}
+### Libraries
+
+# install - NOT RUN
+# install.packages("devtools")
+# devtools::install_github("cansysbio/ConsensusTME")
+library(ConsensusTME)
+library(ggplot2)
+library(gplots)
+library(reshape)
+library(dplyr)
+
+# load TCGA data
+load("data/tcga_breast_basal.Rdata")
+str(clin)
+dim(clin)
+```
+
+## ConsensusTME
+
+```{r consensus, echo=FALSE}
+
+ConsensusTME::cancerAll
+# ConsensusTME::methodSignatures
+# ?consensusTMEAnalysis
+
+consensus <- consensusTMEAnalysis(bulkExp=as.matrix(ex), 
+                            cancerType = "BRCA", 
+                            statMethod = "ssgsea",
+                            immuneScore=T)
+
+# save scores matrix
+# save(consensus, file="data/ConsensusTME_BRCA_Results.Rdata")
+str(consensus)
+dim(consensus)
+rownames(consensus)
+
+# plot results as heatmap
+# heatmap(consensus)
+heatmap.2(as.matrix(consensus), scale = "row", col = bluered(100), trace = "none", key = TRUE,
+          density.info = "none", margins=c(4,10), labCol = F)
+
+#Select samples that have high enrichment score value.
+hc <- hclust(dist(t(as.matrix(consensus))))
+clusters <- cutree(hc, k = 4)
+high_expression_samples <- names(clusters[clusters == 3])
+high_expression_data <- as.matrix(consensus)[, high_expression_samples]
+heatmap.2(high_expression_data, scale = "row", col = bluered(100), trace = "none", key = TRUE,
+          density.info = "none", margins=c(4,10), labCol = F)
+high_expression_patients <- clin[clin$PATIENT_ID %in% high_expression_samples, ]
+
+# plot results as violin plot
+consensus_plot <- melt(consensus, varnames = c("CellType", "Sample"))
+head(consensus_plot)
+ggplot(consensus_plot, aes(x=CellType, y=value, fill=CellType)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+## CIBERSORTx
+Run on web: https://cibersortx.stanford.edu/
+```{r cibersort, echo=FALSE}
+
+cibersort <- read.table("data/CIBERSORTx_Job5_Results.txt",
+                  header=T, stringsAsFactors = F, sep="\t")
+str(cibersort)
+dim(cibersort)
+
+## scores
+colnames(cibersort)
+scores <- cibersort[, 2:10]
+rownames(scores) <- cibersort$Mixture
+
+scores <- t(scores)
+str(scores)
+dim(scores)
+summary(as.numeric(as.matrix(scores)))
+sum(scores[,1])
+
+## statistics
+statistics <- cibersort[, 11:14]
+rownames(statistics) <- cibersort$Mixture  
+colnames(statistics)
+colnames(statistics)[ncol(statistics)] <- "Absolute_score"
+
+```
+
+Plot results from CIBERSORTx:
+```{r cibersort_res, echo=FALSE}
+
+# heatmap(as.matrix(scores))
+heatmap.2(as.matrix(scores), scale = "row", col = bluered(100), trace = "none", key = TRUE,
+          density.info = "none", margins=c(4,10), labCol = F)
+
+# plot results as violin plot
+scores_plot <- melt(scores, varnames = c("CellType", "Sample"))
+head(scores_plot)
+ggplot(scores_plot, aes(x=CellType, y=value, fill=CellType)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+## plot correlations between populations
+correlations <- cor(t(scores))
+heatmap.2(as.matrix(correlations), scale = "row", col = bluered(100), trace = "none", key = TRUE,
+          density.info = "none", margins=c(4,10))
+
+```
+
+
+
+For comparison among cell-types, we need to generate absolute fraction values:
+```{r cibersort_absolute, echo=FALSE}
+
+## generate absolute values to plot as barplot
+scores_abs <- data.frame(matrix(NA, nrow = nrow(scores), ncol = ncol(scores)))
+
+for(i in 1:ncol(scores)){
+  scores_abs[,i] <- scores[,i]/statistics$Absolute_score[i]
+  colnames(scores_abs)[i] <- colnames(scores)[i]
+}
+rownames(scores_abs) <- rownames(scores)
+scores_abs <- as.matrix(scores_abs)
+str(scores_abs)
+dim(scores_abs)
+sum(scores_abs[,1])
+
+## plot barplot
+scores_abs_plot <- melt(scores_abs, varnames = c("CellType", "Sample"))
+
+## plot by clinical variable
+scores_abs_plot2 <- merge(clin[, c("PATIENT_ID",  
+                                   "DFS_STATUS", 
+                                   "OS_STATUS",
+                                   "Stage")], 
+                          scores_abs_plot, by.x="PATIENT_ID", by.y="Sample", all=TRUE) 
+str(scores_abs_plot2)
+dim(scores_abs_plot2)
+
+# ggplot2
+cbp1 <- c("grey70", "#E69F00", "#56B4E9", "darkgreen",
+          "#F0E442", "#0072B2", "#D95F02", "pink2",
+          "#7570B3", "#E7298A", "#87CA6A", "#A6761D", "grey40")
+
+ggplot(scores_abs_plot, aes(fill=CellType, y=value, x="All")) + 
+  geom_bar(position="fill", stat="identity")+
+  scale_fill_manual(values=cbp1)
+
+ggplot(subset(scores_abs_plot2, !is.na(DFS_STATUS)), 
+       aes(fill=CellType, y=value, x=DFS_STATUS, na.rm = TRUE)) + 
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=cbp1)
+
+ggplot(subset(scores_abs_plot2, !is.na(OS_STATUS)), 
+       aes(fill=CellType, y=value, x=OS_STATUS)) + 
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=cbp1)
+
+
+ggplot(subset(scores_abs_plot2, !is.na(Stage)), 
+       aes(fill=CellType, y=value, x=Stage)) + 
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=cbp1)
+```
+
